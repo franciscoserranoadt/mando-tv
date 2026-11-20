@@ -2,7 +2,13 @@ package com.fserrano.mandotv;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.Manifest;
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothDevice;
+import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
+import android.os.Build;
 import android.content.res.ColorStateList;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -41,8 +47,10 @@ public class MainActivity extends Activity {
     private SharedPreferences prefs;
     private int brand;
     private TextView brandBtn;
-    private TextView modeIr, modeSmart;
-    private int mode;          // 0 = infrarrojos, 1 = Smart TV por wifi
+    private TextView modeIr, modeSmart, modeBt;
+    private int mode;          // 0 = infrarrojos, 1 = Smart TV por wifi, 2 = stick Bluetooth
+    private BtHid bt;
+    private String btName = "";
     private int smartType;
     private String smartIp, smartPsk;
     private SmartTv smart;
@@ -69,6 +77,18 @@ public class MainActivity extends Activity {
             }
         });
         applySmartConfig();
+        if (Build.VERSION.SDK_INT >= 28) {
+            bt = new BtHid(this, new BtHid.Listener() {
+                @Override public void onStatus(String msg) { handler.post(() -> toast(msg)); }
+                @Override public void onConnected(String name, String address) {
+                    prefs.edit().putString("btAddr", address).putString("btName", name).apply();
+                    handler.post(() -> { btName = name; updateBrandLabel(); toast("Conectado a " + name); });
+                }
+            });
+            bt.setSavedAddress(prefs.getString("btAddr", ""));
+            btName = prefs.getString("btName", "");
+        }
+        if (mode == 2) ensureBt(false);
 
         getWindow().setStatusBarColor(BG);
         getWindow().setNavigationBarColor(BG);
@@ -90,6 +110,7 @@ public class MainActivity extends Activity {
         super.onDestroy();
         handler.removeCallbacksAndMessages(null);
         sender.execute(() -> smart.close());
+        if (bt != null) bt.stop();
         sender.shutdown();
     }
 
@@ -113,7 +134,7 @@ public class MainActivity extends Activity {
         brandBtn = label("", 15, TXT, true);
         brandBtn.setPadding(px(16), px(10), px(16), px(10));
         brandBtn.setBackground(bg(BLUE, px(22)));
-        brandBtn.setOnClickListener(v -> { if (mode == 0) chooseBrand(); else smartSetup(); });
+        brandBtn.setOnClickListener(v -> { if (mode == 0) chooseBrand(); else if (mode == 1) smartSetup(); else btSetup(); });
         header.addView(brandBtn);
         root.addView(header);
         root.addView(gap(14));
@@ -122,12 +143,15 @@ public class MainActivity extends Activity {
         LinearLayout modes = hbox();
         modes.setBackground(bg(PANEL, px(22)));
         modes.setPadding(px(4), px(4), px(4), px(4));
-        modeIr = label("Infrarrojos", 14, TXT, true);
-        modeSmart = label("Smart TV (wifi)", 14, TXT, true);
+        modeIr = label("Infrarrojos", 13, TXT, true);
+        modeSmart = label("Smart TV", 13, TXT, true);
+        modeBt = label("Stick BT", 13, TXT, true);
         modeIr.setOnClickListener(v -> setMode(0));
         modeSmart.setOnClickListener(v -> setMode(1));
+        modeBt.setOnClickListener(v -> setMode(2));
         modes.addView(modeIr, new LinearLayout.LayoutParams(0, px(42), 1));
         modes.addView(modeSmart, new LinearLayout.LayoutParams(0, px(42), 1));
+        modes.addView(modeBt, new LinearLayout.LayoutParams(0, px(42), 1));
         root.addView(modes);
 
         hintView = label("", 13, SUB, false);
@@ -251,6 +275,11 @@ public class MainActivity extends Activity {
         if (mode == 0) {
             brandBtn.setText(IrCodes.BRANDS[brand] + "  ▾");
             hintView.setText("Toca la marca para cambiarla. Apunta el móvil a la tele.");
+        } else if (mode == 2) {
+            brandBtn.setText((btName.isEmpty() ? "Emparejar" : btName) + "  ▾");
+            hintView.setText(btName.isEmpty()
+                    ? "Toca «Emparejar» para conectar el móvil a tu stick por Bluetooth."
+                    : "Por Bluetooth a " + btName + ". No hace falta apuntar.");
         } else {
             brandBtn.setText((smartType < 0 ? "Configurar" : SmartTv.TYPES[smartType].split(" ")[0]) + "  ▾");
             hintView.setText(smartType < 0 || smartIp.isEmpty()
@@ -259,6 +288,7 @@ public class MainActivity extends Activity {
         }
         modeIr.setBackground(bg(mode == 0 ? BLUE : PANEL, px(18)));
         modeSmart.setBackground(bg(mode == 1 ? BLUE : PANEL, px(18)));
+        modeBt.setBackground(bg(mode == 2 ? BLUE : PANEL, px(18)));
     }
 
     private void setMode(int m) {
@@ -266,6 +296,73 @@ public class MainActivity extends Activity {
         prefs.edit().putInt("mode", m).apply();
         updateBrandLabel();
         if (m == 1 && (smartType < 0 || smartIp.isEmpty())) smartSetup();
+        if (m == 2) ensureBt(btName.isEmpty());
+    }
+
+    // ---------------- Stick por Bluetooth ----------------
+
+    private boolean openSetupAfterPermission;
+
+    private void ensureBt(boolean openSetup) {
+        if (bt == null) { toast("Hace falta Android 9 o superior"); return; }
+        if (Build.VERSION.SDK_INT >= 31 && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT)
+                != PackageManager.PERMISSION_GRANTED) {
+            openSetupAfterPermission = openSetup;
+            requestPermissions(new String[]{Manifest.permission.BLUETOOTH_CONNECT,
+                    Manifest.permission.BLUETOOTH_ADVERTISE, Manifest.permission.BLUETOOTH_SCAN}, 7);
+            return;
+        }
+        BluetoothAdapter a = bt.adapter();
+        if (a != null && !a.isEnabled()) {
+            try { startActivity(new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)); } catch (Exception ignored) { }
+            toast("Activa el Bluetooth y vuelve a tocar «Stick BT»");
+            return;
+        }
+        bt.start();
+        if (openSetup) btSetup();
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(requestCode, permissions, results);
+        if (requestCode != 7) return;
+        if (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) ensureBt(openSetupAfterPermission);
+        else toast("Sin el permiso «Dispositivos cercanos» no puedo usar el Bluetooth");
+    }
+
+    private void btSetup() {
+        if (bt == null) { toast("Hace falta Android 9 o superior"); return; }
+        final List<BluetoothDevice> devs = bt.bonded();
+        String[] items = new String[devs.size() + 1];
+        items[0] = "📡  Hacer visible el móvil (para emparejar)";
+        for (int i = 0; i < devs.size(); i++) items[i + 1] = "Conectar con: " + BtHid.name(devs.get(i));
+        new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+                .setTitle("Conectar con el stick")
+                .setItems(items, (d, which) -> {
+                    if (which == 0) {
+                        Intent i = new Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE);
+                        i.putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 180);
+                        try { startActivity(i); } catch (Exception ignored) { }
+                        btHelp();
+                    } else {
+                        final BluetoothDevice dev = devs.get(which - 1);
+                        sender.execute(() -> bt.connect(dev));
+                    }
+                })
+                .setNeutralButton("¿Cómo se hace?", (d, w) -> btHelp())
+                .setNegativeButton("Cerrar", null)
+                .show();
+    }
+
+    private void btHelp() {
+        new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+                .setTitle("Emparejar con el stick")
+                .setMessage("1. Deja esta app abierta y el móvil visible.\n\n"
+                        + "2. En el stick ve a Ajustes → Mandos y accesorios (o Bluetooth) → Añadir accesorio / Buscar.\n\n"
+                        + "3. Elige tu móvil en la lista y acepta el código en los dos aparatos.\n\n"
+                        + "4. Si no se conecta solo, vuelve a «Emparejar» y toca «Conectar con: (tu stick)».")
+                .setPositiveButton("Entendido", null)
+                .show();
     }
 
     private void applySmartConfig() {
@@ -371,6 +468,11 @@ public class MainActivity extends Activity {
     }
 
     private void send(String code) {
+        if (mode == 2) {
+            if (bt == null) { toast("Hace falta Android 9 o superior"); return; }
+            sender.execute(() -> bt.send(code));
+            return;
+        }
         if (mode == 1) {
             if (smartType < 0 || smartIp.isEmpty()) { toast("Configura primero tu Smart TV"); return; }
             sender.execute(() -> smart.send(code));
