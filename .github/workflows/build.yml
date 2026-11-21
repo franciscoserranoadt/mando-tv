@@ -23,7 +23,18 @@ jobs:
         with:
           gradle-version: '8.7'
 
+      - name: Comprobar contraseña de firma
+        env:
+          KEYSTORE_PASS: ${{ secrets.KEYSTORE_PASS }}
+        run: |
+          if [ -z "$KEYSTORE_PASS" ]; then
+            echo "::error::Falta el secreto KEYSTORE_PASS (Settings > Secrets and variables > Actions)"
+            exit 1
+          fi
+
       - name: Compilar
+        env:
+          KEYSTORE_PASS: ${{ secrets.KEYSTORE_PASS }}
         run: gradle assembleDebug --no-daemon
 
       - name: Renombrar APK

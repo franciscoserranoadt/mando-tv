@@ -10,13 +10,27 @@ android {
         applicationId 'com.fserrano.mandotv'
         minSdk 23
         targetSdk 34
-        versionCode 7
-        versionName '4.2'
+        versionCode 8
+        versionName '4.3'
+    }
+
+    signingConfigs {
+        fija {
+            // Firma fija: así cada versión se instala encima de la anterior
+            storeFile rootProject.file('mandotv.jks')
+            storePassword System.getenv('KEYSTORE_PASS') ?: ''
+            keyAlias 'mandotv'
+            keyPassword System.getenv('KEYSTORE_PASS') ?: ''
+        }
     }
 
     buildTypes {
+        debug {
+            if (System.getenv('KEYSTORE_PASS')) signingConfig signingConfigs.fija
+        }
         release {
             minifyEnabled false
+            if (System.getenv('KEYSTORE_PASS')) signingConfig signingConfigs.fija
         }
     }
 
