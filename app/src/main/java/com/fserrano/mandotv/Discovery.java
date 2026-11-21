@@ -66,6 +66,7 @@ final class Discovery {
                 else if (r.contains("webos") || r.contains("lge")) { type = 1; label = "LG"; }
                 else if (r.contains("sony") || r.contains("bravia")) { type = 2; label = "Sony"; }
                 else if (r.contains("roku")) { type = 3; label = "Roku"; }
+                else if (r.contains("xiaomi") || r.contains("mitv") || r.contains("android")) { type = 4; label = "Xiaomi / Android TV"; }
                 else if (r.contains("dial")) { label = "Smart TV / Android TV"; }
                 Found prev = map.get(ip);
                 if (prev == null || (prev.type < 0 && type >= 0)) map.put(ip, new Found(ip, type, label));

@@ -30,10 +30,12 @@ import okhttp3.WebSocketListener;
 /** Control de Smart TV por wifi: Samsung (Tizen), LG (webOS), Sony Bravia y Roku. */
 final class SmartTv {
 
-    static final String[] TYPES = {"Samsung Smart TV", "LG Smart TV (webOS)", "Sony Bravia", "Roku / TCL Roku"};
+    static final String[] TYPES = {"Samsung Smart TV", "LG Smart TV (webOS)", "Sony Bravia", "Roku / TCL Roku",
+            "Xiaomi / Android TV / Google TV"};
 
     interface Listener {
         void onStatus(String msg);
+        String askPairingCode();
         void onSaveKey(int type, String key);
     }
 
@@ -61,8 +63,14 @@ final class SmartTv {
 
     private final List<String> pending = new ArrayList<>();
 
-    SmartTv(Listener listener) {
+    private final AndroidTvRemote atv;
+
+    SmartTv(Listener listener, java.io.File dir) {
         this.listener = listener;
+        this.atv = new AndroidTvRemote(dir, new AndroidTvRemote.Ui() {
+            @Override public void status(String msg) { listener.onStatus(msg); }
+            @Override public String askPairingCode() { return listener.askPairingCode(); }
+        });
         OkHttpClient base;
         try {
             final X509TrustManager tm = new X509TrustManager() {
@@ -92,6 +100,7 @@ final class SmartTv {
         this.psk = psk == null ? "" : psk.trim();
         this.savedKey = savedKey == null ? "" : savedKey;
         if (changed) close();
+        atv.setIp(type == 4 ? this.ip : "");
     }
 
     synchronized void close() {
@@ -102,6 +111,7 @@ final class SmartTv {
         samsungReady = false; lgRegistered = false;
         samsungTriedPlain = false; lgTriedSecure = false;
         pending.clear();
+        atv.close();
     }
 
     /** Envía una tecla. Llamar desde un hilo secundario. */
@@ -113,6 +123,7 @@ final class SmartTv {
                 case 1: lg(code); break;
                 case 2: sony(code); break;
                 case 3: roku(code); break;
+                case 4: atv.send(code); break;
                 default: listener.onStatus("Elige el tipo de Smart TV");
             }
         } catch (Exception e) {
@@ -145,6 +156,9 @@ final class SmartTv {
                     rokuPost("/launch/" + id);
                     break;
                 }
+                case 4:
+                    atv.launch(app);
+                    break;
                 default:
                     listener.onStatus("Abrir apps no está disponible en " + TYPES[type]);
             }
@@ -212,6 +226,9 @@ final class SmartTv {
                     if (enter) rokuPost("/keypress/Enter");
                     break;
                 }
+                case 4:
+                    atv.text(text, enter);
+                    break;
                 default:
                     listener.onStatus("Elige el tipo de Smart TV");
             }
@@ -235,6 +252,9 @@ final class SmartTv {
                     break;
                 case 3:
                     rokuPost("/keypress/Backspace");
+                    break;
+                case 4:
+                    atv.key(67);
                     break;
                 default:
                     listener.onStatus("Borrar no está disponible en " + TYPES[type] + ". Usa el teclado de la tele");

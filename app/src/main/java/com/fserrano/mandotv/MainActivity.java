@@ -79,7 +79,8 @@ public class MainActivity extends Activity {
             @Override public void onSaveKey(int type, String key) {
                 prefs.edit().putString("smartKey_" + type + "_" + smartIp, key).apply();
             }
-        });
+            @Override public String askPairingCode() { return waitForPairingCode(); }
+        }, getFilesDir());
         applySmartConfig();
         if (Build.VERSION.SDK_INT >= 28) {
             bt = new BtHid(this, new BtHid.Listener() {
@@ -154,7 +155,7 @@ public class MainActivity extends Activity {
         modes.setPadding(px(4), px(4), px(4), px(4));
         modeIr = label("Infrarrojos", 13, TXT, true);
         modeSmart = label("Smart TV", 13, TXT, true);
-        modeBt = label("Stick BT", 13, TXT, true);
+        modeBt = label("Bluetooth", 13, TXT, true);
         modeIr.setOnClickListener(v -> setMode(0));
         modeSmart.setOnClickListener(v -> setMode(1));
         modeBt.setOnClickListener(v -> setMode(2));
@@ -294,7 +295,7 @@ public class MainActivity extends Activity {
         } else if (mode == 2) {
             brandBtn.setText((btName.isEmpty() ? "Emparejar" : btName) + "  ▾");
             hintView.setText(btName.isEmpty()
-                    ? "Toca «Emparejar» para conectar el móvil a tu stick por Bluetooth."
+                    ? "Toca «Emparejar» para conectar el móvil a tu stick o tele Android (Xiaomi…) por Bluetooth."
                     : "Por Bluetooth a " + btName + ". No hace falta apuntar.");
         } else {
             brandBtn.setText((smartType < 0 ? "Configurar" : SmartTv.TYPES[smartType].split(" ")[0]) + "  ▾");
@@ -331,7 +332,7 @@ public class MainActivity extends Activity {
         BluetoothAdapter a = bt.adapter();
         if (a != null && !a.isEnabled()) {
             try { startActivity(new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)); } catch (Exception ignored) { }
-            toast("Activa el Bluetooth y vuelve a tocar «Stick BT»");
+            toast("Activa el Bluetooth y vuelve a tocar «Bluetooth»");
             return;
         }
         bt.start();
@@ -353,7 +354,7 @@ public class MainActivity extends Activity {
         items[0] = "📡  Hacer visible el móvil (para emparejar)";
         for (int i = 0; i < devs.size(); i++) items[i + 1] = "Conectar con: " + BtHid.name(devs.get(i));
         new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
-                .setTitle("Conectar con el stick")
+                .setTitle("Conectar con el stick o la tele")
                 .setItems(items, (d, which) -> {
                     if (which == 0) {
                         Intent i = new Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE);
@@ -372,11 +373,11 @@ public class MainActivity extends Activity {
 
     private void btHelp() {
         new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
-                .setTitle("Emparejar con el stick")
+                .setTitle("Emparejar por Bluetooth")
                 .setMessage("1. Deja esta app abierta y el móvil visible.\n\n"
-                        + "2. En el stick ve a Ajustes → Mandos y accesorios (o Bluetooth) → Añadir accesorio / Buscar.\n\n"
+                        + "2. En el stick o la tele (Xiaomi, Android TV) ve a Ajustes → Mandos y accesorios (o Bluetooth) → Añadir accesorio / Buscar.\n\n"
                         + "3. Elige tu móvil en la lista y acepta el código en los dos aparatos.\n\n"
-                        + "4. Si no se conecta solo, vuelve a «Emparejar» y toca «Conectar con: (tu stick)».")
+                        + "4. Si no se conecta solo, vuelve a «Emparejar» y toca «Conectar con: (tu stick o tele)».")
                 .setPositiveButton("Entendido", null)
                 .show();
     }
@@ -407,6 +408,9 @@ public class MainActivity extends Activity {
         box.setPadding(px(22), px(8), px(22), 0);
         TextView info = label(type == 2
                 ? "Escribe la IP de la tele y la clave PSK que pusiste en la tele Sony (por defecto 0000)."
+                : type == 4
+                ? "Escribe la IP de la tele (en la tele: Ajustes → Red e Internet → tu wifi). "
+                  + "La primera vez saldrá un código de 6 caracteres en la tele para emparejar."
                 : "Escribe la IP de la tele o pulsa «Buscar». El móvil y la tele tienen que estar en el mismo wifi.",
                 14, SUB, false);
         info.setGravity(Gravity.START);
@@ -486,7 +490,7 @@ public class MainActivity extends Activity {
                 if (smartType < 0 || smartIp.isEmpty()) { toast("Configura primero tu Smart TV"); return; }
                 sender.execute(() -> smart.launch(code));
             } else if (mode == 2) {
-                toast("En el stick abre las apps desde Inicio");
+                toast("Por Bluetooth abre las apps desde Inicio");
             } else {
                 toast("Las apps solo se abren en modo Smart TV (wifi)");
             }
@@ -548,6 +552,45 @@ public class MainActivity extends Activity {
         return iv;
     }
 
+    // ---------------- Código de emparejamiento (Android TV) ----------------
+
+    /** Se llama desde el hilo de envío: muestra un diálogo y espera la respuesta. */
+    private String waitForPairingCode() {
+        final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
+        final String[] result = {null};
+        handler.post(() -> {
+            if (isFinishing()) { latch.countDown(); return; }
+            LinearLayout box = vbox();
+            box.setPadding(px(22), px(8), px(22), 0);
+            TextView info = label("Escribe el código de 6 letras/números que sale ahora en la pantalla de la tele.",
+                    14, SUB, false);
+            info.setGravity(Gravity.START);
+            box.addView(info);
+            final EditText field = new EditText(this);
+            field.setHint("Ej.: 4F2A9C");
+            field.setTextColor(TXT);
+            field.setHintTextColor(SUB);
+            field.setSingleLine(true);
+            field.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
+                    | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+            box.addView(field);
+            AlertDialog dlg = new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+                    .setTitle("Emparejar con la tele")
+                    .setView(box)
+                    .setPositiveButton("Emparejar", (d, w) -> result[0] = field.getText().toString())
+                    .setNegativeButton("Cancelar", null)
+                    .create();
+            dlg.setOnDismissListener(d -> latch.countDown());
+            dlg.show();
+            field.requestFocus();
+            if (dlg.getWindow() != null) {
+                dlg.getWindow().setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE);
+            }
+        });
+        try { latch.await(3, java.util.concurrent.TimeUnit.MINUTES); } catch (InterruptedException ignored) { }
+        return result[0];
+    }
+
     // ---------------- Escribir con el teclado ----------------
 
     private View writeKey() {
@@ -561,7 +604,7 @@ public class MainActivity extends Activity {
     }
 
     private void openKeyboard() {
-        if (mode == 0) { toast("Para escribir usa el modo Smart TV o Stick BT"); return; }
+        if (mode == 0) { toast("Para escribir usa el modo Smart TV o Bluetooth"); return; }
         if (mode == 1 && (smartType < 0 || smartIp.isEmpty())) { toast("Configura primero tu Smart TV"); return; }
         if (mode == 2 && bt == null) { toast("Hace falta Android 9 o superior"); return; }
         LinearLayout box = vbox();
@@ -732,7 +775,7 @@ public class MainActivity extends Activity {
         } catch (Exception ignored) { }
         tvs.put(o);
         switchTv(tvs.length() - 1);
-        toast("Elige cómo se maneja «" + name + "»: Infrarrojos, Smart TV o Stick BT");
+        toast("Elige cómo se maneja «" + name + "»: Infrarrojos, Smart TV o Bluetooth");
     }
 
     private void switchTv(int i) { switchTv(i, true); }
