@@ -24,6 +24,8 @@ import android.view.ViewGroup;
 import android.text.InputType;
 import android.widget.CheckBox;
 import android.widget.EditText;
+import android.widget.ImageView;
+import android.graphics.drawable.Drawable;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -172,11 +174,11 @@ public class MainActivity extends Activity {
                 key("Encender", "POWER", RED, false),
                 key("Fuente", "INPUT", BTN, false),
                 key("Silencio", "MUTE", BTN, false)));
-        root.addView(row(px(48),
-                key("YouTube", "APP_YOUTUBE", 0xFFC4302B, false),
-                key("Netflix", "APP_NETFLIX", 0xFF8E0E13, false),
-                key("Prime", "APP_PRIME", 0xFF1A6FA8, false),
-                key("Disney+", "APP_DISNEY", 0xFF1B2A6B, false)));
+        root.addView(row(px(56),
+                appKey("YouTube", "APP_YOUTUBE", 0xFFC4302B, "com.google.android.youtube"),
+                appKey("Netflix", "APP_NETFLIX", 0xFF8E0E13, "com.netflix.mediaclient"),
+                appKey("Prime", "APP_PRIME", 0xFF1A6FA8, "com.amazon.avod.thirdpartyclient"),
+                appKey("Disney+", "APP_DISNEY", 0xFF1B2A6B, "com.disney.disneyplus")));
         root.addView(gap(16));
 
         // Cruceta
@@ -525,6 +527,26 @@ public class MainActivity extends Activity {
         if (lastToast != null) lastToast.cancel();
         lastToast = Toast.makeText(this, msg, Toast.LENGTH_SHORT);
         lastToast.show();
+    }
+
+    // ---------------- Botones de apps con su icono ----------------
+
+    /** Usa el icono oficial de la app instalada en el móvil; si no está, muestra el nombre. */
+    private View appKey(String text, String code, int color, String pkg) {
+        Drawable icon = null;
+        try { icon = getPackageManager().getApplicationIcon(pkg); } catch (Exception ignored) { }
+        if (icon == null) return key(text, code, color, false);
+        ImageView iv = new ImageView(this);
+        iv.setImageDrawable(icon);
+        iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        iv.setPadding(px(6), px(6), px(6), px(6));
+        iv.setBackground(bg(BTN, px(18)));
+        iv.setContentDescription(text);
+        iv.setClickable(true);
+        iv.setHapticFeedbackEnabled(false);
+        iv.setSoundEffectsEnabled(false);
+        iv.setOnClickListener(v -> press(v, code));
+        return iv;
     }
 
     // ---------------- Escribir con el teclado ----------------
