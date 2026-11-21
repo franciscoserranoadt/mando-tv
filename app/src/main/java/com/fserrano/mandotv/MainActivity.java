@@ -109,6 +109,70 @@ public class MainActivity extends Activity {
         } else if (mode == 0 && !brandChosen) {
             chooseBrand();
         }
+        checkUpdate(false);
+    }
+
+    // ---------------- Actualizaciones ----------------
+
+    private void checkUpdate(final boolean manual) {
+        if (manual) toast("Buscando actualizaciones…");
+        new Thread(() -> {
+            final Updater.Info info = Updater.latest();
+            final int mine = Updater.installedCode(this);
+            handler.post(() -> {
+                if (isFinishing()) return;
+                if (info == null) { if (manual) toast("No se pudo comprobar. ¿Tienes internet?"); return; }
+                if (info.code <= mine) { if (manual) toast("Ya tienes la última versión (v" + Updater.installedName(this) + ")"); return; }
+                if (!manual && prefs.getInt("skipVersion", 0) == info.code) return;
+                new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+                        .setTitle("Hay una versión nueva")
+                        .setMessage("Mando TV v" + info.name + " ya está disponible (tienes la v"
+                                + Updater.installedName(this) + ").\n\nTus teles guardadas se mantienen.")
+                        .setPositiveButton("Actualizar", (d, w) -> startUpdate())
+                        .setNeutralButton("Esta no", (d, w) -> prefs.edit().putInt("skipVersion", info.code).apply())
+                        .setNegativeButton("Más tarde", null)
+                        .show();
+            });
+        }).start();
+    }
+
+    private void startUpdate() {
+        if (Build.VERSION.SDK_INT >= 26 && !getPackageManager().canRequestPackageInstalls()) {
+            new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+                    .setTitle("Falta un permiso")
+                    .setMessage("Para actualizarse, Android tiene que permitir que Mando TV instale apps.\n\n"
+                            + "En la siguiente pantalla activa «Permitir de esta fuente», vuelve atrás y pulsa otra vez Actualizar.")
+                    .setPositiveButton("Abrir ajustes", (d, w) -> {
+                        try {
+                            startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                    android.net.Uri.parse("package:" + getPackageName())));
+                        } catch (Exception ignored) { }
+                    })
+                    .setNegativeButton("Cancelar", null)
+                    .show();
+            return;
+        }
+        toast("Descargando la versión nueva…");
+        new Thread(() -> {
+            String err = Updater.downloadAndInstall(this);
+            if (err != null) handler.post(() -> toast(err));
+        }).start();
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        if (intent == null || !Updater.ACTION_STATUS.equals(intent.getAction())) return;
+        int status = intent.getIntExtra(android.content.pm.PackageInstaller.EXTRA_STATUS, -999);
+        if (status == android.content.pm.PackageInstaller.STATUS_PENDING_USER_ACTION) {
+            Intent confirm = intent.getParcelableExtra(Intent.EXTRA_INTENT);
+            if (confirm != null) {
+                try { startActivity(confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); } catch (Exception ignored) { }
+            }
+        } else if (status != android.content.pm.PackageInstaller.STATUS_SUCCESS) {
+            String msg = intent.getStringExtra(android.content.pm.PackageInstaller.EXTRA_STATUS_MESSAGE);
+            toast("No se pudo instalar" + (msg == null ? "" : ": " + msg));
+        }
     }
 
     @Override
@@ -725,13 +789,15 @@ public class MainActivity extends Activity {
     }
 
     private void chooseTv() {
-        String[] items = new String[tvs.length() + 1];
+        String[] items = new String[tvs.length() + 2];
         for (int i = 0; i < tvs.length(); i++) items[i] = (i == currentTv ? "✓  " : "     ") + tvName(i);
         items[tvs.length()] = "➕  Añadir otra tele";
+        items[tvs.length() + 1] = "🔄  Buscar actualizaciones (v" + Updater.installedName(this) + ")";
         new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
                 .setTitle("¿Qué tele quieres manejar?")
                 .setItems(items, (d, which) -> {
                     if (which == tvs.length()) askTvName("Nueva tele", "", name -> addTv(name));
+                    else if (which == tvs.length() + 1) checkUpdate(true);
                     else switchTv(which);
                 })
                 .setNeutralButton("Renombrar / borrar", (d, w) -> editTv())
