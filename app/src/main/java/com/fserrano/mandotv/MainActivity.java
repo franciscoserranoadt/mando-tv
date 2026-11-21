@@ -18,7 +18,6 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.Gravity;
-import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
@@ -221,6 +220,8 @@ public class MainActivity extends Activity {
         TextView b = label(text, text.length() <= 2 ? 22 : 15, TXT, true);
         b.setBackground(bg(color, px(18)));
         b.setClickable(true);
+        b.setHapticFeedbackEnabled(false);
+        b.setSoundEffectsEnabled(false);
         if (repeat) {
             b.setOnTouchListener((v, e) -> {
                 switch (e.getActionMasked()) {
@@ -462,8 +463,6 @@ public class MainActivity extends Activity {
     // ---------------- Envío IR ----------------
 
     private void press(View v, String code) {
-        v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY,
-                HapticFeedbackConstants.FLAG_IGNORE_GLOBAL_SETTING);
         send(code);
     }
 
