@@ -177,7 +177,6 @@ public class MainActivity extends Activity {
         root.addView(row(px(56),
                 appKey("YouTube", "APP_YOUTUBE", 0xFFC4302B, "com.google.android.youtube"),
                 appKey("Netflix", "APP_NETFLIX", 0xFF8E0E13, "com.netflix.mediaclient"),
-                appKey("Prime", "APP_PRIME", 0xFF1A6FA8, "com.amazon.avod.thirdpartyclient"),
                 appKey("Disney+", "APP_DISNEY", 0xFF1B2A6B, "com.disney.disneyplus")));
         root.addView(gap(16));
 
