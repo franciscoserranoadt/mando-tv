@@ -22,11 +22,15 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.text.InputType;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 import java.util.List;
 import java.util.concurrent.ExecutorService;
@@ -50,6 +54,10 @@ public class MainActivity extends Activity {
     private int mode;          // 0 = infrarrojos, 1 = Smart TV por wifi, 2 = stick Bluetooth
     private BtHid bt;
     private String btName = "";
+    private String btAddr = "";
+    private JSONArray tvs;
+    private int currentTv;
+    private TextView tvBtn;
     private int smartType;
     private String smartIp, smartPsk;
     private SmartTv smart;
@@ -63,16 +71,11 @@ public class MainActivity extends Activity {
         dp = getResources().getDisplayMetrics().density;
         ir = (ConsumerIrManager) getSystemService(CONSUMER_IR_SERVICE);
         prefs = getSharedPreferences("mando", MODE_PRIVATE);
-        brand = prefs.getInt("brand", 0);
-        if (brand < 0 || brand >= IrCodes.BRANDS.length) brand = 0;
-        mode = prefs.getInt("mode", 0);
-        smartType = prefs.getInt("smartType", -1);
-        smartIp = prefs.getString("smartIp", "");
-        smartPsk = prefs.getString("smartPsk", "");
+        loadTvs();
         smart = new SmartTv(new SmartTv.Listener() {
             @Override public void onStatus(String msg) { handler.post(() -> toast(msg)); }
             @Override public void onSaveKey(int type, String key) {
-                prefs.edit().putString("smartKey" + type, key).apply();
+                prefs.edit().putString("smartKey_" + type + "_" + smartIp, key).apply();
             }
         });
         applySmartConfig();
@@ -80,12 +83,13 @@ public class MainActivity extends Activity {
             bt = new BtHid(this, new BtHid.Listener() {
                 @Override public void onStatus(String msg) { handler.post(() -> toast(msg)); }
                 @Override public void onConnected(String name, String address) {
-                    prefs.edit().putString("btAddr", address).putString("btName", name).apply();
-                    handler.post(() -> { btName = name; updateBrandLabel(); toast("Conectado a " + name); });
+                    handler.post(() -> {
+                        btName = name; btAddr = address; persist();
+                        updateBrandLabel(); toast("Conectado a " + name);
+                    });
                 }
             });
-            bt.setSavedAddress(prefs.getString("btAddr", ""));
-            btName = prefs.getString("btName", "");
+            bt.setSavedAddress(btAddr);
         }
         if (mode == 2) ensureBt(false);
 
@@ -99,7 +103,7 @@ public class MainActivity extends Activity {
                     .setMessage("Este móvil no tiene emisor de infrarrojos. Puedes usar el modo «Smart TV (wifi)».")
                     .setPositiveButton("Vale", null)
                     .show();
-        } else if (mode == 0 && !prefs.getBoolean("brandChosen", false)) {
+        } else if (mode == 0 && !brandChosen) {
             chooseBrand();
         }
     }
@@ -127,9 +131,13 @@ public class MainActivity extends Activity {
         // Cabecera: título + selector de marca
         LinearLayout header = hbox();
         header.setGravity(Gravity.CENTER_VERTICAL);
-        TextView title = label("Mando TV", 24, TXT, true);
-        title.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
-        header.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
+        tvBtn = label("", 20, TXT, true);
+        tvBtn.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+        tvBtn.setSingleLine(true);
+        tvBtn.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        tvBtn.setOnClickListener(v -> chooseTv());
+        header.addView(tvBtn, new LinearLayout.LayoutParams(0, -2, 1));
+        updateTvLabel();
         brandBtn = label("", 15, TXT, true);
         brandBtn.setPadding(px(16), px(10), px(16), px(10));
         brandBtn.setBackground(bg(BLUE, px(22)));
@@ -164,6 +172,11 @@ public class MainActivity extends Activity {
                 key("Encender", "POWER", RED, false),
                 key("Fuente", "INPUT", BTN, false),
                 key("Silencio", "MUTE", BTN, false)));
+        root.addView(row(px(48),
+                key("YouTube", "APP_YOUTUBE", 0xFFC4302B, false),
+                key("Netflix", "APP_NETFLIX", 0xFF8E0E13, false),
+                key("Prime", "APP_PRIME", 0xFF1A6FA8, false),
+                key("Disney+", "APP_DISNEY", 0xFF1B2A6B, false)));
         root.addView(gap(16));
 
         // Cruceta
@@ -195,7 +208,7 @@ public class MainActivity extends Activity {
         nums.addView(row(px(56), key("1", "D1", BTN, false), key("2", "D2", BTN, false), key("3", "D3", BTN, false)));
         nums.addView(row(px(56), key("4", "D4", BTN, false), key("5", "D5", BTN, false), key("6", "D6", BTN, false)));
         nums.addView(row(px(56), key("7", "D7", BTN, false), key("8", "D8", BTN, false), key("9", "D9", BTN, false)));
-        nums.addView(row(px(56), key("Salir", "EXIT", BTN, false), key("0", "D0", BTN, false), blank()));
+        nums.addView(row(px(56), key("Salir", "EXIT", BTN, false), key("0", "D0", BTN, false), writeKey()));
         root.addView(nums);
 
         return sv;
@@ -217,7 +230,7 @@ public class MainActivity extends Activity {
     }
 
     private View key(String text, String code, int color, boolean repeat) {
-        TextView b = label(text, text.length() <= 2 ? 22 : 15, TXT, true);
+        TextView b = label(text, text.length() <= 2 ? 22 : (text.length() > 6 ? 13 : 15), TXT, true);
         b.setBackground(bg(color, px(18)));
         b.setClickable(true);
         b.setHapticFeedbackEnabled(false);
@@ -261,7 +274,8 @@ public class MainActivity extends Activity {
                 .setTitle("¿De qué marca es la tele?")
                 .setSingleChoiceItems(IrCodes.BRANDS, brand, (d, which) -> {
                     brand = which;
-                    prefs.edit().putInt("brand", brand).putBoolean("brandChosen", true).apply();
+                    brandChosen = true;
+                    persist();
                     updateBrandLabel();
                     d.dismiss();
                 })
@@ -294,7 +308,7 @@ public class MainActivity extends Activity {
 
     private void setMode(int m) {
         mode = m;
-        prefs.edit().putInt("mode", m).apply();
+        persist();
         updateBrandLabel();
         if (m == 1 && (smartType < 0 || smartIp.isEmpty())) smartSetup();
         if (m == 2) ensureBt(btName.isEmpty());
@@ -369,7 +383,8 @@ public class MainActivity extends Activity {
     private void applySmartConfig() {
         final int t = smartType;
         final String ipv = smartIp, pskv = smartPsk;
-        final String key = t >= 0 ? prefs.getString("smartKey" + t, "") : "";
+        final String key = t >= 0 ? prefs.getString("smartKey_" + t + "_" + ipv,
+                prefs.getString("smartKey" + t, "")) : "";
         sender.execute(() -> smart.configure(t, ipv, pskv, key));
     }
 
@@ -421,12 +436,10 @@ public class MainActivity extends Activity {
             dlg.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
                 String ipv = ipField.getText().toString().trim();
                 if (!ipv.matches("\\d{1,3}(\\.\\d{1,3}){3}")) { toast("Escribe una IP válida, como 192.168.1.40"); return; }
-                if (type != smartType) prefs.edit().remove("smartKey" + type).apply();
                 smartType = type;
                 smartIp = ipv;
                 smartPsk = pskField.getText().toString().trim();
-                prefs.edit().putInt("smartType", smartType).putString("smartIp", smartIp)
-                        .putString("smartPsk", smartPsk).apply();
+                persist();
                 applySmartConfig();
                 updateBrandLabel();
                 dlg.dismiss();
@@ -467,6 +480,17 @@ public class MainActivity extends Activity {
     }
 
     private void send(String code) {
+        if (code.startsWith("APP_")) {
+            if (mode == 1) {
+                if (smartType < 0 || smartIp.isEmpty()) { toast("Configura primero tu Smart TV"); return; }
+                sender.execute(() -> smart.launch(code));
+            } else if (mode == 2) {
+                toast("En el stick abre las apps desde Inicio");
+            } else {
+                toast("Las apps solo se abren en modo Smart TV (wifi)");
+            }
+            return;
+        }
         if (mode == 2) {
             if (bt == null) { toast("Hace falta Android 9 o superior"); return; }
             sender.execute(() -> bt.send(code));
@@ -501,6 +525,241 @@ public class MainActivity extends Activity {
         if (lastToast != null) lastToast.cancel();
         lastToast = Toast.makeText(this, msg, Toast.LENGTH_SHORT);
         lastToast.show();
+    }
+
+    // ---------------- Escribir con el teclado ----------------
+
+    private View writeKey() {
+        TextView b = label("Escribir", 13, TXT, true);
+        b.setBackground(bg(BLUE, px(18)));
+        b.setClickable(true);
+        b.setHapticFeedbackEnabled(false);
+        b.setSoundEffectsEnabled(false);
+        b.setOnClickListener(v -> openKeyboard());
+        return b;
+    }
+
+    private void openKeyboard() {
+        if (mode == 0) { toast("Para escribir usa el modo Smart TV o Stick BT"); return; }
+        if (mode == 1 && (smartType < 0 || smartIp.isEmpty())) { toast("Configura primero tu Smart TV"); return; }
+        if (mode == 2 && bt == null) { toast("Hace falta Android 9 o superior"); return; }
+        LinearLayout box = vbox();
+        box.setPadding(px(22), px(8), px(22), 0);
+        TextView info = label("Primero pon el cursor en el buscador de la tele (YouTube, Netflix…). "
+                + "Luego escribe aquí y pulsa Enviar.", 14, SUB, false);
+        info.setGravity(Gravity.START);
+        box.addView(info);
+        final EditText field = new EditText(this);
+        field.setHint("Escribe aquí…");
+        field.setTextColor(TXT);
+        field.setHintTextColor(SUB);
+        field.setSingleLine(true);
+        box.addView(field);
+        final CheckBox enter = new CheckBox(this);
+        enter.setText("Pulsar Intro al terminar");
+        enter.setTextColor(TXT);
+        enter.setChecked(true);
+        box.addView(enter);
+
+        final AlertDialog dlg = new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+                .setTitle("Escribir en la tele")
+                .setView(box)
+                .setPositiveButton("Enviar", null)
+                .setNeutralButton("⌫ Borrar", null)
+                .setNegativeButton("Cerrar", null)
+                .create();
+        dlg.setOnShowListener(x -> {
+            dlg.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+                final String text = field.getText().toString();
+                final boolean withEnter = enter.isChecked();
+                if (text.isEmpty() && !withEnter) return;
+                field.setText("");
+                if (mode == 2) sender.execute(() -> bt.typeText(text, withEnter));
+                else sender.execute(() -> smart.sendText(text, withEnter));
+            });
+            dlg.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v -> {
+                if (mode == 2) sender.execute(() -> bt.backspace());
+                else sender.execute(() -> smart.backspace());
+            });
+        });
+        dlg.show();
+        field.requestFocus();
+        if (dlg.getWindow() != null) {
+            dlg.getWindow().setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE);
+        }
+    }
+
+    // ---------------- Varias teles guardadas ----------------
+
+    private boolean brandChosen;
+
+    private void loadTvs() {
+        try {
+            String raw = prefs.getString("tvs", null);
+            if (raw != null) tvs = new JSONArray(raw);
+        } catch (Exception e) { tvs = null; }
+        if (tvs == null || tvs.length() == 0) {
+            // Primera vez: se crea «Mi tele» con lo que ya estaba configurado
+            tvs = new JSONArray();
+            JSONObject o = new JSONObject();
+            try {
+                o.put("name", "Mi tele");
+                o.put("mode", prefs.getInt("mode", 0));
+                o.put("brand", prefs.getInt("brand", 0));
+                o.put("brandChosen", prefs.getBoolean("brandChosen", false));
+                o.put("smartType", prefs.getInt("smartType", -1));
+                o.put("smartIp", prefs.getString("smartIp", ""));
+                o.put("smartPsk", prefs.getString("smartPsk", ""));
+                o.put("btAddr", prefs.getString("btAddr", ""));
+                o.put("btName", prefs.getString("btName", ""));
+            } catch (Exception ignored) { }
+            tvs.put(o);
+            prefs.edit().putString("tvs", tvs.toString()).apply();
+        }
+        currentTv = prefs.getInt("currentTv", 0);
+        if (currentTv < 0 || currentTv >= tvs.length()) currentTv = 0;
+        loadFields();
+    }
+
+    private void loadFields() {
+        JSONObject o = tvs.optJSONObject(currentTv);
+        if (o == null) o = new JSONObject();
+        mode = o.optInt("mode", 0);
+        brand = o.optInt("brand", 0);
+        if (brand < 0 || brand >= IrCodes.BRANDS.length) brand = 0;
+        brandChosen = o.optBoolean("brandChosen", false);
+        smartType = o.optInt("smartType", -1);
+        smartIp = o.optString("smartIp", "");
+        smartPsk = o.optString("smartPsk", "");
+        btAddr = o.optString("btAddr", "");
+        btName = o.optString("btName", "");
+    }
+
+    private void persist() {
+        try {
+            JSONObject o = tvs.optJSONObject(currentTv);
+            if (o == null) { o = new JSONObject(); tvs.put(currentTv, o); }
+            o.put("mode", mode);
+            o.put("brand", brand);
+            o.put("brandChosen", brandChosen);
+            o.put("smartType", smartType);
+            o.put("smartIp", smartIp);
+            o.put("smartPsk", smartPsk);
+            o.put("btAddr", btAddr);
+            o.put("btName", btName);
+        } catch (Exception ignored) { }
+        prefs.edit().putString("tvs", tvs.toString()).putInt("currentTv", currentTv).apply();
+    }
+
+    private String tvName(int i) {
+        JSONObject o = tvs.optJSONObject(i);
+        return o == null ? "Tele" : o.optString("name", "Tele");
+    }
+
+    private void updateTvLabel() {
+        if (tvBtn != null) tvBtn.setText("📺 " + tvName(currentTv) + " ▾");
+    }
+
+    private void chooseTv() {
+        String[] items = new String[tvs.length() + 1];
+        for (int i = 0; i < tvs.length(); i++) items[i] = (i == currentTv ? "✓  " : "     ") + tvName(i);
+        items[tvs.length()] = "➕  Añadir otra tele";
+        new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+                .setTitle("¿Qué tele quieres manejar?")
+                .setItems(items, (d, which) -> {
+                    if (which == tvs.length()) askTvName("Nueva tele", "", name -> addTv(name));
+                    else switchTv(which);
+                })
+                .setNeutralButton("Renombrar / borrar", (d, w) -> editTv())
+                .setNegativeButton("Cerrar", null)
+                .show();
+    }
+
+    private interface NameCallback { void done(String name); }
+
+    private void askTvName(String title, String current, NameCallback cb) {
+        LinearLayout box = vbox();
+        box.setPadding(px(22), px(8), px(22), 0);
+        final EditText field = new EditText(this);
+        field.setHint("Ej.: Salón, Dormitorio, Cafetería");
+        field.setTextColor(TXT);
+        field.setHintTextColor(SUB);
+        field.setSingleLine(true);
+        field.setText(current);
+        box.addView(field);
+        new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+                .setTitle(title)
+                .setView(box)
+                .setPositiveButton("Guardar", (d, w) -> {
+                    String n = field.getText().toString().trim();
+                    if (n.isEmpty()) n = "Tele " + (tvs.length() + 1);
+                    cb.done(n);
+                })
+                .setNegativeButton("Cancelar", null)
+                .show();
+    }
+
+    private void addTv(String name) {
+        persist();
+        JSONObject o = new JSONObject();
+        try {
+            o.put("name", name);
+            o.put("mode", 0);
+            o.put("brand", 0);
+            o.put("brandChosen", false);
+            o.put("smartType", -1);
+        } catch (Exception ignored) { }
+        tvs.put(o);
+        switchTv(tvs.length() - 1);
+        toast("Elige cómo se maneja «" + name + "»: Infrarrojos, Smart TV o Stick BT");
+    }
+
+    private void switchTv(int i) { switchTv(i, true); }
+
+    private void switchTv(int i, boolean saveCurrent) {
+        if (saveCurrent) persist();
+        currentTv = i;
+        loadFields();
+        prefs.edit().putInt("currentTv", currentTv).apply();
+        applySmartConfig();
+        if (bt != null) {
+            final String addr = btAddr;
+            sender.execute(() -> bt.switchTo(addr));
+        }
+        updateTvLabel();
+        updateBrandLabel();
+        if (mode == 2) ensureBt(false);
+    }
+
+    private void editTv() {
+        final int idx = currentTv;
+        String[] opts = tvs.length() > 1
+                ? new String[]{"Renombrar «" + tvName(idx) + "»", "Borrar «" + tvName(idx) + "»"}
+                : new String[]{"Renombrar «" + tvName(idx) + "»"};
+        new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+                .setTitle(tvName(idx))
+                .setItems(opts, (d, which) -> {
+                    if (which == 0) {
+                        askTvName("Renombrar tele", tvName(idx), name -> {
+                            try { tvs.getJSONObject(idx).put("name", name); } catch (Exception ignored) { }
+                            persist();
+                            updateTvLabel();
+                        });
+                    } else {
+                        new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+                                .setTitle("¿Borrar «" + tvName(idx) + "»?")
+                                .setPositiveButton("Borrar", (d2, w2) -> {
+                                    tvs.remove(idx);
+                                    currentTv = 0;
+                                    prefs.edit().putString("tvs", tvs.toString()).putInt("currentTv", 0).apply();
+                                    switchTv(0, false);
+                                })
+                                .setNegativeButton("Cancelar", null)
+                                .show();
+                    }
+                })
+                .setNegativeButton("Cerrar", null)
+                .show();
     }
 
     // ---------------- Utilidades de diseño ----------------

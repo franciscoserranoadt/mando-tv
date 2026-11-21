@@ -10,6 +10,7 @@ import android.bluetooth.BluetoothManager;
 import android.bluetooth.BluetoothProfile;
 import android.content.Context;
 
+import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -207,6 +208,75 @@ final class BtHid {
         } catch (Exception e) {
             listener.onStatus("Error Bluetooth: " + e.getMessage());
         }
+    }
+
+    /** Cambia a otro stick guardado. */
+    void switchTo(String address) {
+        String a = address == null ? "" : address;
+        BluetoothDevice h = host;
+        if (h != null && h.getAddress().equals(a)) return;
+        try { if (h != null && hid != null) hid.disconnect(h); } catch (Exception ignored) { }
+        host = null;
+        wantAddress = a;
+        connectSaved();
+    }
+
+    // ---------- Escribir texto como un teclado (distribución estándar) ----------
+
+    private static int[] usageFor(char c) {
+        if (c >= 'a' && c <= 'z') return new int[]{0, 0x04 + (c - 'a')};
+        if (c >= 'A' && c <= 'Z') return new int[]{0x02, 0x04 + (c - 'A')};
+        if (c >= '1' && c <= '9') return new int[]{0, 0x1E + (c - '1')};
+        switch (c) {
+            case '0': return new int[]{0, 0x27};
+            case ' ': return new int[]{0, 0x2C};
+            case '-': return new int[]{0, 0x2D};
+            case '_': return new int[]{0x02, 0x2D};
+            case '.': return new int[]{0, 0x37};
+            case ',': return new int[]{0, 0x36};
+            case '/': return new int[]{0, 0x38};
+            case '?': return new int[]{0x02, 0x38};
+            case '!': return new int[]{0x02, 0x1E};
+            case '@': return new int[]{0x02, 0x1F};
+            case '&': return new int[]{0x02, 0x24};
+            case '(': return new int[]{0x02, 0x26};
+            case ')': return new int[]{0x02, 0x27};
+            case ':': return new int[]{0x02, 0x33};
+            case ';': return new int[]{0, 0x33};
+            case '\'': return new int[]{0, 0x34};
+            case '"': return new int[]{0x02, 0x34};
+            default: return null;
+        }
+    }
+
+    private boolean keyTap(BluetoothDevice h, int mod, int usage) throws InterruptedException {
+        boolean ok = hid.sendReport(h, 1, new byte[]{(byte) mod, 0, (byte) usage, 0, 0, 0, 0, 0});
+        Thread.sleep(18);
+        hid.sendReport(h, 1, new byte[8]);
+        Thread.sleep(12);
+        return ok;
+    }
+
+    void typeText(String text, boolean enter) {
+        BluetoothDevice h = host;
+        if (hid == null || h == null) { send("OK_DUMMY"); return; }
+        // Quita tildes (á → a, ñ → n) para que salga bien en cualquier stick
+        String plain = Normalizer.normalize(text, Normalizer.Form.NFD).replaceAll("\\p{M}", "");
+        try {
+            for (int i = 0; i < plain.length(); i++) {
+                int[] u = usageFor(plain.charAt(i));
+                if (u != null) keyTap(h, u[0], u[1]);
+            }
+            if (enter) keyTap(h, 0, 0x28);
+        } catch (Exception e) {
+            listener.onStatus("Error Bluetooth: " + e.getMessage());
+        }
+    }
+
+    void backspace() {
+        BluetoothDevice h = host;
+        if (hid == null || h == null) { send("OK_DUMMY"); return; }
+        try { keyTap(h, 0, 0x2A); } catch (Exception e) { listener.onStatus("Error Bluetooth: " + e.getMessage()); }
     }
 
     void stop() {

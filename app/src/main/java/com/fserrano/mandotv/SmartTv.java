@@ -5,6 +5,7 @@ import android.util.Base64;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.security.cert.X509Certificate;
@@ -119,6 +120,148 @@ final class SmartTv {
         }
     }
 
+    // ===================== APPS Y TEXTO =====================
+
+    /** Abre YouTube, Netflix, Prime Video o Disney+. Llamar desde un hilo secundario. */
+    void launch(String app) {
+        if (ip.isEmpty()) { listener.onStatus("Configura primero la IP de la tele"); return; }
+        try {
+            switch (type) {
+                case 0: {
+                    String id = pick(app, "111299001912", "3201907018807", "3201910019365", "3201901017640");
+                    JSONObject data = new JSONObject().put("appId", id).put("action_type", "DEEP_LINK");
+                    JSONObject params = new JSONObject().put("event", "ed.apps.launch").put("to", "host").put("data", data);
+                    samsungRaw(new JSONObject().put("method", "ms.channel.emit").put("params", params).toString());
+                    break;
+                }
+                case 1: {
+                    String id = pick(app, "youtube.leanback.v4", "netflix", "amazon", "com.disney.disneyplus-prod");
+                    if (!lgReady()) return;
+                    synchronized (this) { lgRequest("ssap://system.launcher/launch", new JSONObject().put("id", id)); }
+                    break;
+                }
+                case 3: {
+                    String id = pick(app, "837", "12", "13", "291097");
+                    rokuPost("/launch/" + id);
+                    break;
+                }
+                default:
+                    listener.onStatus("Abrir apps no está disponible en " + TYPES[type]);
+            }
+        } catch (Exception e) {
+            listener.onStatus("Error: " + e.getMessage());
+        }
+    }
+
+    private static String pick(String app, String yt, String nf, String prime, String disney) {
+        switch (app) {
+            case "APP_YOUTUBE": return yt;
+            case "APP_NETFLIX": return nf;
+            case "APP_PRIME": return prime;
+            default: return disney;
+        }
+    }
+
+    /** Escribe texto en el buscador abierto en la tele. Llamar desde un hilo secundario. */
+    void sendText(String text, boolean enter) {
+        if (ip.isEmpty()) { listener.onStatus("Configura primero la IP de la tele"); return; }
+        try {
+            switch (type) {
+                case 0: {
+                    if (!text.isEmpty()) {
+                        String b64 = Base64.encodeToString(text.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP);
+                        JSONObject p = new JSONObject().put("Cmd", b64).put("DataOfCmd", "base64")
+                                .put("TypeOfRemote", "SendInputString");
+                        samsungRaw(new JSONObject().put("method", "ms.remote.control").put("params", p).toString());
+                    }
+                    if (enter) samsungRaw(samsungMsg("KEY_ENTER"));
+                    break;
+                }
+                case 1: {
+                    if (!lgReady()) return;
+                    synchronized (this) {
+                        if (!text.isEmpty()) lgRequest("ssap://com.webos.service.ime/insertText",
+                                new JSONObject().put("text", text).put("replace", 0));
+                        if (enter) lgRequest("ssap://com.webos.service.ime/sendEnterKey", null);
+                    }
+                    break;
+                }
+                case 2: {
+                    if (!text.isEmpty()) {
+                        String body = new JSONObject().put("method", "setTextForm").put("id", 601)
+                                .put("params", new JSONArray().put(text)).put("version", "1.0").toString();
+                        Request req = new Request.Builder()
+                                .url("http://" + ip + "/sony/appControl")
+                                .header("X-Auth-PSK", psk.isEmpty() ? "0000" : psk)
+                                .post(RequestBody.create(body, MediaType.parse("application/json")))
+                                .build();
+                        try (Response r = httpClient.newCall(req).execute()) {
+                            if (!r.isSuccessful()) listener.onStatus("La tele Sony no acepta texto ahora (error " + r.code() + ")");
+                        }
+                    }
+                    if (enter) sony("OK");
+                    break;
+                }
+                case 3: {
+                    for (int i = 0; i < text.length(); ) {
+                        int cp = text.codePointAt(i);
+                        String ch = new String(Character.toChars(cp));
+                        rokuPost("/keypress/Lit_" + URLEncoder.encode(ch, "UTF-8"));
+                        i += Character.charCount(cp);
+                    }
+                    if (enter) rokuPost("/keypress/Enter");
+                    break;
+                }
+                default:
+                    listener.onStatus("Elige el tipo de Smart TV");
+            }
+        } catch (java.io.IOException e) {
+            listener.onStatus("No conecta con la tele. Revisa la IP y que estéis en el mismo wifi");
+        } catch (Exception e) {
+            listener.onStatus("Error: " + e.getMessage());
+        }
+    }
+
+    /** Borra una letra en el buscador de la tele. */
+    void backspace() {
+        if (ip.isEmpty()) return;
+        try {
+            switch (type) {
+                case 1:
+                    if (!lgReady()) return;
+                    synchronized (this) {
+                        lgRequest("ssap://com.webos.service.ime/deleteCharacters", new JSONObject().put("count", 1));
+                    }
+                    break;
+                case 3:
+                    rokuPost("/keypress/Backspace");
+                    break;
+                default:
+                    listener.onStatus("Borrar no está disponible en " + TYPES[type] + ". Usa el teclado de la tele");
+            }
+        } catch (Exception e) {
+            listener.onStatus("Error: " + e.getMessage());
+        }
+    }
+
+    /** true si la LG ya está conectada; si no, empieza a conectar. */
+    private synchronized boolean lgReady() {
+        if (lgRegistered && lgWs != null) return true;
+        if (lgWs == null) lgConnect(false);
+        listener.onStatus("Conectando con la tele LG… vuelve a pulsar en un momento");
+        return false;
+    }
+
+    private void rokuPost(String path) throws java.io.IOException {
+        Request req = new Request.Builder()
+                .url("http://" + ip + ":8060" + path)
+                .post(RequestBody.create(new byte[0], null))
+                .build();
+        try (Response r = httpClient.newCall(req).execute()) {
+            if (!r.isSuccessful()) listener.onStatus("La tele Roku respondió con error " + r.code());
+        }
+    }
+
     // ===================== SAMSUNG =====================
 
     private static final Map<String, String> SAMSUNG = new HashMap<>();
@@ -134,11 +277,15 @@ final class SmartTv {
     private synchronized void samsung(String code) {
         String key = SAMSUNG.get(code);
         if (key == null) return;
+        samsungRaw(samsungMsg(key));
+    }
+
+    private synchronized void samsungRaw(String msg) {
         if (samsungReady && samsungWs != null) {
-            samsungWs.send(samsungMsg(key));
+            samsungWs.send(msg);
             return;
         }
-        if (pending.size() < 5) pending.add(key);
+        if (pending.size() < 8) pending.add(msg);
         if (samsungWs == null) samsungConnect(false);
     }
 
@@ -176,7 +323,7 @@ final class SmartTv {
                         synchronized (SmartTv.this) {
                             samsungReady = true;
                             if (!token.isEmpty()) { savedKey = token; listener.onSaveKey(0, token); }
-                            for (String k : pending) ws.send(samsungMsg(k));
+                            for (String m : pending) ws.send(m);
                             pending.clear();
                         }
                         listener.onStatus("Conectado a la tele Samsung");
