@@ -8,7 +8,7 @@ import java.util.Map;
 /** Códigos infrarrojos de las principales marcas de televisores. */
 final class IrCodes {
 
-    static final String[] BRANDS = {"Samsung", "LG", "Sony", "Philips", "Panasonic"};
+    static final String[] BRANDS = {"Samsung", "LG", "Sony", "Philips", "Panasonic", "Xiaomi"};
 
     static final class Signal {
         final int freq;
@@ -21,6 +21,7 @@ final class IrCodes {
     private static final Map<String, Integer> SONY = new HashMap<>();
     private static final Map<String, Integer> PHILIPS = new HashMap<>();
     private static final Map<String, Integer> PANASONIC = new HashMap<>();
+    private static final Map<String, Integer> XIAOMI = new HashMap<>();
 
     static {
         // Samsung (protocolo Samsung32, dirección 0x07)
@@ -60,6 +61,14 @@ final class IrCodes {
                 "D6", 0xA8A9, "D7", 0x6869, "D8", 0xE8E9, "D9", 0x1819, "D0", 0x9899);
     }
 
+    static {
+        // Xiaomi Mi TV / Mi Box (protocolo propio Xiaomi, dispositivo 0x86; encender usa 0x3C)
+        put(XIAOMI, "INPUT", 0x01, "MENU", 0x04, "UP", 0x05, "DOWN", 0x06, "BACK", 0x07, "EXIT", 0x07,
+                "HOME", 0x08, "LEFT", 0x0B, "RIGHT", 0x0C, "OK", 0x0D, "VOLUP", 0x0E, "VOLDOWN", 0x0F,
+                "MUTE", 0xA1, "D1", 0xC1, "D2", 0xC2, "D3", 0xC3, "D4", 0xC4, "D5", 0xC5, "D6", 0xC6,
+                "D7", 0xC7, "D8", 0xC8, "D9", 0xC9, "D0", 0xCA);
+    }
+
     private static void put(Map<String, Integer> m, Object... kv) {
         for (int i = 0; i < kv.length; i += 2) m.put((String) kv[i], (Integer) kv[i + 1]);
     }
@@ -73,6 +82,9 @@ final class IrCodes {
             case 2: c = SONY.get(key); return c == null ? null : sony(1, c);
             case 3: c = PHILIPS.get(key); return c == null ? null : rc5(0, c);
             case 4: c = PANASONIC.get(key); return c == null ? null : panasonic(c);
+            case 5:
+                if ("POWER".equals(key)) return xiaomi(0x3C, 0xCC);
+                c = XIAOMI.get(key); return c == null ? null : xiaomi(0x86, c);
             default: return null;
         }
     }
@@ -158,6 +170,25 @@ final class IrCodes {
         for (int i = 47; i >= 0; i--) { p.add(432); p.add(((code >> i) & 1) == 1 ? 1296 : 432); }
         p.add(432);
         return new Signal(37000, arr(p));
+    }
+
+    /** Protocolo Xiaomi: {36k,290,msb}<2,-2|2,-3|2,-4|2,-5>(1000u,-2,D:8,F:8,C:4,2,^30m) */
+    static Signal xiaomi(int dev, int fn) {
+        int c = ((dev >> 4) ^ dev ^ (fn >> 4) ^ fn) & 0xF;
+        int data = ((dev & 0xFF) << 12) | ((fn & 0xFF) << 4) | c;
+        List<Integer> frame = new ArrayList<>();
+        frame.add(1000); frame.add(580);
+        for (int i = 9; i >= 0; i--) {
+            int sym = (data >> (2 * i)) & 0x3;
+            frame.add(580); frame.add((2 + sym) * 290);
+        }
+        frame.add(580);
+        int dur = 0;
+        for (int v : frame) dur += v;
+        List<Integer> p = new ArrayList<>(frame);
+        p.add(Math.max(580, 30000 - dur));
+        p.addAll(frame);
+        return new Signal(36000, arr(p));
     }
 
     private IrCodes() {}
